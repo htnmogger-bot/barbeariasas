@@ -1,0 +1,878 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>BarberBook — Agendamento Online</title>
+<script src="https://cdn.tailwindcss.com/3.4.17"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.10/babel.min.js"></script>
+<style>
+:root{--gold:#d4af37;--gold2:#c9a84c;--bg:#0a0a0a;--surface:#111;--card:#1c1c1c;--border:#252525;--text:#f0f0f0;--muted:#888}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;min-height:100vh;-webkit-font-smoothing:antialiased}
+::-webkit-scrollbar{width:3px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
+.btn-gold{background:var(--gold);color:#000;font-weight:800;border-radius:12px;padding:15px 24px;border:none;cursor:pointer;font-size:15px;width:100%;transition:opacity .15s;letter-spacing:.01em}
+.btn-gold:hover{opacity:.88}
+.btn-gold:disabled{opacity:.5;cursor:not-allowed}
+.btn-outline{background:transparent;color:var(--gold);border:1.5px solid var(--gold);border-radius:12px;padding:14px 24px;cursor:pointer;font-size:15px;width:100%;transition:all .15s;font-weight:700}
+.btn-outline:hover{background:rgba(212,175,55,.1)}
+.input-dark{background:#0d0d0d;border:1.5px solid var(--border);border-radius:10px;padding:14px 16px;color:var(--text);font-size:15px;width:100%;outline:none;transition:border-color .15s;-webkit-appearance:none}
+.input-dark:focus{border-color:var(--gold)}
+.input-dark::placeholder{color:#3a3a3a}
+.bottom-nav{position:fixed;bottom:0;left:0;right:0;background:#0d0d0d;border-top:1px solid var(--border);display:flex;z-index:100;padding-bottom:env(safe-area-inset-bottom,0px)}
+.bottom-nav button{flex:1;padding:12px 4px 10px;border:none;background:transparent;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:3px;font-size:10px;color:var(--muted);transition:color .15s;font-weight:600}
+.bottom-nav button.active{color:var(--gold)}
+.badge{padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700}
+.badge-pending{background:rgba(245,158,11,.12);color:#f59e0b}
+.badge-confirmed{background:rgba(34,197,94,.12);color:#22c55e}
+.badge-done{background:rgba(99,102,241,.12);color:#818cf8}
+.badge-cancelled{background:rgba(239,68,68,.12);color:#ef4444}
+.time-slot{padding:11px 6px;border:1.5px solid var(--border);border-radius:10px;text-align:center;cursor:pointer;font-size:14px;font-weight:700;background:var(--card);transition:all .15s;color:var(--text);user-select:none}
+.time-slot:hover{border-color:var(--gold);color:var(--gold)}
+.time-slot.selected{border-color:var(--gold);background:rgba(212,175,55,.15);color:var(--gold)}
+.time-slot.taken{opacity:.3;cursor:not-allowed}
+.day-btn{width:40px;height:40px;border-radius:50%;border:1.5px solid var(--border);background:transparent;color:var(--muted);cursor:pointer;font-size:12px;font-weight:700;transition:all .15s}
+.day-btn.active{border-color:var(--gold);background:rgba(212,175,55,.15);color:var(--gold)}
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:200;display:flex;align-items:flex-end}
+.modal-sheet{background:#0f0f0f;border-radius:20px 20px 0 0;padding:24px;width:100%;max-height:90vh;overflow-y:auto;border-top:1px solid var(--border)}
+.card-hover{transition:border-color .15s}
+.card-hover:hover{border-color:var(--gold)!important}
+input[type=time]{color-scheme:dark}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const{useState,useEffect,useCallback}=React;
+
+// ─── UTILS ───────────────────────────────────────────────────
+const ls=(k,d)=>{try{const v=localStorage.getItem(k);return v?JSON.parse(v):d}catch{return d}};
+const ls_set=(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v))}catch{}};
+const TODAY='2026-10-18';
+const fmtDate=d=>{if(!d)return'';const[y,m,day]=d.split('-');return`${day}/${m}/${y}`};
+const fmtPrice=p=>`R$ ${Number(p).toFixed(2).replace('.',',')}`;
+const DAY_NAMES=['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'];
+const getDayName=d=>DAY_NAMES[d];
+const getWeekday=dateStr=>{const[y,m,d]=dateStr.split('-').map(Number);return new Date(y,m-1,d).getDay()};
+const addDays=(dateStr,n)=>{const[y,m,d]=dateStr.split('-').map(Number);const dt=new Date(y,m-1,d+n);return`${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`};
+const t2m=t=>{const[h,m]=t.split(':').map(Number);return h*60+m};
+const m2t=m=>`${String(Math.floor(m/60)).padStart(2,'0')}:${String(m%60).padStart(2,'0')}`;
+
+const genSlots=(sch,appts,svcId,date,svcs)=>{
+  const svc=svcs.find(s=>s.id===svcId);if(!svc)return[];
+  const dur=svc.duration;
+  const wd=getWeekday(date);
+  if(!sch.days.includes(wd))return[];
+  const sM=t2m(sch.start),eM=t2m(sch.end),bsM=t2m(sch.breakStart),beM=t2m(sch.breakEnd);
+  const booked=appts.filter(a=>a.date===date&&a.status!=='cancelled').map(a=>({s:t2m(a.time),e:t2m(a.time)+a.duration}));
+  const slots=[];
+  for(let t=sM;t+dur<=eM;t+=10){
+    if(t>=bsM&&t<beM)continue;
+    if(t+dur>bsM&&t<beM)continue;
+    const ok=!booked.some(b=>t<b.e&&t+dur>b.s);
+    slots.push({time:m2t(t),available:ok});
+  }
+  return slots;
+};
+
+const getAvailDates=(sch,today)=>{
+  const dates=[];
+  for(let i=1;i<=sch.maxAdvanceDays;i++){
+    const d=addDays(today,i);
+    if(sch.days.includes(getWeekday(d)))dates.push(d);
+  }
+  return dates;
+};
+
+// ─── DEFAULTS ────────────────────────────────────────────────
+const TOMORROW=addDays(TODAY,1);
+const D2=addDays(TODAY,2);
+
+const DEF_SERVICES=[
+  {id:1,name:'Corte Masculino',desc:'Corte moderno ou clássico com acabamento',price:35,duration:30,active:true},
+  {id:2,name:'Corte + Barba',desc:'Corte completo com modelagem de barba na navalha',price:55,duration:50,active:true},
+  {id:3,name:'Barba',desc:'Aparar e modelar barba com navalha quente',price:25,duration:20,active:true},
+  {id:4,name:'Sobrancelha',desc:'Design de sobrancelha masculina com pinça',price:10,duration:10,active:true},
+];
+const DEF_SCH={days:[1,2,3,4,5,6],start:'09:00',end:'19:00',breakStart:'12:00',breakEnd:'13:00',minAdvanceHours:1,maxAdvanceDays:30};
+const DEF_APPTS=[
+  {id:1,client:'João Silva',phone:'(31) 99999-9999',serviceId:1,service:'Corte Masculino',price:35,duration:30,date:TOMORROW,time:'09:00',status:'confirmed'},
+  {id:2,client:'Pedro Santos',phone:'(31) 98888-8888',serviceId:2,service:'Corte + Barba',price:55,duration:50,date:TOMORROW,time:'10:00',status:'pending'},
+  {id:3,client:'Carlos Lima',phone:'(31) 97777-7777',serviceId:3,service:'Barba',price:25,duration:20,date:TOMORROW,time:'11:30',status:'confirmed'},
+  {id:4,client:'Rafael Costa',phone:'(31) 96666-6666',serviceId:1,service:'Corte Masculino',price:35,duration:30,date:D2,time:'14:00',status:'pending'},
+];
+const DEF_NOTIFS=[
+  {id:1,client:'Rafael Costa',service:'Corte Masculino',date:D2,time:'14:00',phone:'(31) 96666-6666',read:false,ts:'18/10/2026 09:32'},
+  {id:2,client:'Carlos Lima',service:'Barba',date:TOMORROW,time:'11:30',phone:'(31) 97777-7777',read:true,ts:'17/10/2026 16:15'},
+];
+const DEF_SHOP={name:'Barbearia Premium',tagline:'Estilo e precisão no corte',address:'Rua das Flores, 123 — BH, MG',phone:'(31) 99999-0000',instagram:'@barbeariapr'};
+
+// ─── ICONS ───────────────────────────────────────────────────
+const ICONS={
+  scissors:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/><line x1="8.12" y1="8.12" x2="12" y2="12"/></svg>,
+  calendar:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>,
+  home:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9,22 9,12 15,12 15,22"/></svg>,
+  settings:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>,
+  bell:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg>,
+  list:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>,
+  check:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20,6 9,17 4,12"/></svg>,
+  x:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>,
+  plus:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>,
+  chR:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="9,18 15,12 9,6"/></svg>,
+  chL:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="15,18 9,12 15,6"/></svg>,
+  clock:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><polyline points="12,6 12,12 16,14"/></svg>,
+  user:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>,
+  phone:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07A19.5 19.5 0 013.07 13.6 19.79 19.79 0 01.22 5c-.11-1.2.78-2.18 2-2.18h3a2 2 0 012 1.72 12.84 12.84 0 00.7 2.81 2 2 0 01-.45 2.11L6.91 10.09a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45 12.84 12.84 0 002.81.7A2 2 0 0122 16.92z"/></svg>,
+  edit:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>,
+  trash:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3,6 5,6 21,6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6M14 11v6M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/></svg>,
+  star:<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth="1"><polygon points="12,2 15.09,8.26 22,9.27 17,14.14 18.18,21.02 12,17.77 5.82,21.02 7,14.14 2,9.27 8.91,8.26"/></svg>,
+  logout:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16,17 21,12 16,7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>,
+  eye:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>,
+  lock:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>,
+  map:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></svg>,
+};
+const Ic=({n,sz=20,col='currentColor'})=><span style={{display:'inline-flex',alignItems:'center',justifyContent:'center',width:sz,height:sz,color:col,flexShrink:0}}>{React.cloneElement(ICONS[n]||<svg/>,{width:sz,height:sz})}</span>;
+
+// ─── APP ─────────────────────────────────────────────────────
+function App(){
+  const[view,setView]=useState('public');
+  const[adminTab,setAdminTab]=useState('dashboard');
+  const[services,setServices]=useState(()=>ls('bb_sv',DEF_SERVICES));
+  const[sch,setSch]=useState(()=>ls('bb_sch',DEF_SCH));
+  const[appts,setAppts]=useState(()=>ls('bb_ap',DEF_APPTS));
+  const[notifs,setNotifs]=useState(()=>ls('bb_no',DEF_NOTIFS));
+  const[shop,setShop]=useState(()=>ls('bb_sh',DEF_SHOP));
+  // booking
+  const[step,setStep]=useState(0);
+  const[selSvc,setSelSvc]=useState(null);
+  const[selDate,setSelDate]=useState(null);
+  const[selTime,setSelTime]=useState(null);
+  const[cName,setCName]=useState('');
+  const[cPhone,setCPhone]=useState('');
+  const[confirmed,setConfirmed]=useState(null);
+
+  useEffect(()=>ls_set('bb_sv',services),[services]);
+  useEffect(()=>ls_set('bb_sch',sch),[sch]);
+  useEffect(()=>ls_set('bb_ap',appts),[appts]);
+  useEffect(()=>ls_set('bb_no',notifs),[notifs]);
+  useEffect(()=>ls_set('bb_sh',shop),[shop]);
+
+  const unread=notifs.filter(n=>!n.read).length;
+
+  const doBook=()=>{
+    const svc=services.find(s=>s.id===selSvc);
+    const a={id:Date.now(),client:cName,phone:cPhone,serviceId:selSvc,service:svc.name,price:svc.price,duration:svc.duration,date:selDate,time:selTime,status:'pending'};
+    setAppts(p=>[...p,a]);
+    const nn={id:Date.now()+1,client:cName,service:svc.name,date:selDate,time:selTime,phone:cPhone,read:false,ts:new Date().toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}).replace(',','')};
+    setNotifs(p=>[nn,...p]);
+    setConfirmed(a);setStep(4);
+  };
+
+  const updStatus=(id,status)=>setAppts(p=>p.map(a=>a.id===id?{...a,status}:a));
+
+  const resetBook=()=>{setStep(0);setSelSvc(null);setSelDate(null);setSelTime(null);setCName('');setCPhone('');setConfirmed(null)};
+
+  if(view==='public') return(
+    <PublicView shop={shop} services={services.filter(s=>s.active)} sch={sch} appts={appts}
+      step={step} setStep={setStep} selSvc={selSvc} setSelSvc={setSelSvc}
+      selDate={selDate} setSelDate={setSelDate} selTime={selTime} setSelTime={setSelTime}
+      cName={cName} setCName={setCName} cPhone={cPhone} setCPhone={setCPhone}
+      confirmed={confirmed} onBook={doBook} onReset={resetBook}
+      onAdmin={()=>{resetBook();setView('admin')}}/>
+  );
+
+  return(
+    <AdminView shop={shop} setShop={setShop} services={services} setServices={setServices}
+      sch={sch} setSch={setSch} appts={appts} setAppts={setAppts}
+      notifs={notifs} setNotifs={setNotifs} unread={unread}
+      tab={adminTab} setTab={setAdminTab} updStatus={updStatus}
+      onPublic={()=>setView('public')}/>
+  );
+}
+
+// ─── PUBLIC ──────────────────────────────────────────────────
+function PublicView({shop,services,sch,appts,step,setStep,selSvc,setSelSvc,selDate,setSelDate,selTime,setSelTime,cName,setCName,cPhone,setCPhone,confirmed,onBook,onReset,onAdmin}){
+  if(step===0) return<ShopHome shop={shop} services={services} onPick={id=>{setSelSvc(id);setStep(1)}} onAdmin={onAdmin}/>;
+  if(step===1) return<DatePick sch={sch} appts={appts} selSvc={selSvc} svcs={services} selDate={selDate} setSelDate={setSelDate} onNext={()=>setStep(2)} onBack={()=>setStep(0)}/>;
+  if(step===2) return<TimePick sch={sch} appts={appts} selSvc={selSvc} svcs={services} selDate={selDate} selTime={selTime} setSelTime={setSelTime} onNext={()=>setStep(3)} onBack={()=>setStep(1)}/>;
+  if(step===3) return<BookForm selSvc={selSvc} svcs={services} selDate={selDate} selTime={selTime} cName={cName} setCName={setCName} cPhone={cPhone} setCPhone={setCPhone} onConfirm={onBook} onBack={()=>setStep(2)}/>;
+  if(step===4) return<BookDone booking={confirmed} onReset={onReset}/>;
+  return null;
+}
+
+function ShopHome({shop,services,onPick,onAdmin}){
+  return(
+    <div style={{background:'var(--bg)',minHeight:'100vh'}}>
+      <div style={{background:'linear-gradient(180deg,#1a1400 0%,var(--bg) 100%)',paddingBottom:32}}>
+        <div style={{padding:'52px 20px 0',textAlign:'center'}}>
+          <div style={{width:88,height:88,borderRadius:'50%',background:'rgba(212,175,55,.12)',border:'2px solid var(--gold)',display:'flex',alignItems:'center',justifyContent:'center',margin:'0 auto 18px'}}>
+            <Ic n="scissors" sz={40} col="var(--gold)"/>
+          </div>
+          <h1 style={{color:'var(--gold)',fontSize:28,fontWeight:900,margin:'0 0 6px',letterSpacing:'-.5px'}}>{shop.name}</h1>
+          <p style={{color:'#999',fontSize:14,margin:'0 0 14px'}}>{shop.tagline}</p>
+          <div style={{display:'flex',alignItems:'center',justifyContent:'center',gap:4,color:'#555',fontSize:13}}>
+            <Ic n="map" sz={14} col="#555"/><span>{shop.address}</span>
+          </div>
+          <div style={{display:'flex',justifyContent:'center',gap:4,marginTop:14}}>
+            {[1,2,3,4,5].map(i=><Ic key={i} n="star" sz={16} col="var(--gold)"/>)}
+            <span style={{color:'#888',fontSize:13,marginLeft:4}}>5.0</span>
+          </div>
+        </div>
+      </div>
+
+      <div style={{padding:'0 16px 100px'}}>
+        <div style={{padding:'16px 0 12px'}}>
+          <h2 style={{fontSize:18,fontWeight:800,margin:0}}>Serviços</h2>
+          <p style={{color:'#666',fontSize:13,margin:'4px 0 0'}}>Toque para agendar</p>
+        </div>
+        <div style={{display:'flex',flexDirection:'column',gap:10}}>
+          {services.map(svc=>(
+            <button key={svc.id} onClick={()=>onPick(svc.id)} className="card-hover" style={{background:'var(--card)',border:'1px solid var(--border)',borderRadius:14,padding:18,textAlign:'left',cursor:'pointer',color:'var(--text)',display:'flex',alignItems:'center',gap:14,width:'100%'}}>
+              <div style={{width:50,height:50,borderRadius:12,background:'rgba(212,175,55,.08)',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
+                <Ic n="scissors" sz={24} col="var(--gold)"/>
+              </div>
+              <div style={{flex:1}}>
+                <div style={{fontWeight:800,fontSize:15,marginBottom:4}}>{svc.name}</div>
+                {svc.desc&&<div style={{color:'#777',fontSize:13,marginBottom:6,lineHeight:1.4}}>{svc.desc}</div>}
+                <div style={{display:'flex',gap:14}}>
+                  <span style={{color:'var(--gold)',fontWeight:800,fontSize:17}}>{fmtPrice(svc.price)}</span>
+                  <span style={{color:'#555',fontSize:13,display:'flex',alignItems:'center',gap:3}}><Ic n="clock" sz={13} col="#555"/>{svc.duration} min</span>
+                </div>
+              </div>
+              <Ic n="chR" sz={18} col="#444"/>
+            </button>
+          ))}
+        </div>
+
+        <div style={{marginTop:20,display:'flex',flexDirection:'column',gap:8}}>
+          <div style={{background:'var(--card)',border:'1px solid var(--border)',borderRadius:12,padding:16,display:'flex',gap:12,alignItems:'center'}}>
+            <Ic n="clock" sz={22} col="var(--gold)"/>
+            <div><div style={{fontWeight:700,fontSize:14,marginBottom:2}}>Horário de funcionamento</div><div style={{color:'#777',fontSize:13}}>Seg–Sáb · 09:00 às 19:00</div></div>
+          </div>
+          <div style={{background:'var(--card)',border:'1px solid var(--border)',borderRadius:12,padding:16,display:'flex',gap:12,alignItems:'center'}}>
+            <Ic n="phone" sz={22} col="var(--gold)"/>
+            <div><div style={{fontWeight:700,fontSize:14,marginBottom:2}}>Contato</div><div style={{color:'#777',fontSize:13}}>{shop.phone}</div></div>
+          </div>
+        </div>
+      </div>
+
+      <div style={{position:'fixed',bottom:24,right:16}}>
+        <button onClick={onAdmin} title="Área administrativa" style={{background:'var(--card)',border:'1px solid var(--border)',borderRadius:'50%',width:44,height:44,display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer'}}>
+          <Ic n="lock" sz={18} col="#555"/>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function DatePick({sch,appts,selSvc,svcs,selDate,setSelDate,onNext,onBack}){
+  const svc=svcs.find(s=>s.id===selSvc);
+  const avail=getAvailDates(sch,TODAY);
+  const[mOff,setMOff]=useState(0);
+
+  const grouped={};
+  avail.forEach(d=>{const[y,m]=d.split('-');const k=`${y}-${m}`;if(!grouped[k])grouped[k]=[];grouped[k].push(d)});
+  const mKeys=Object.keys(grouped);
+  const mKey=mKeys[mOff]||mKeys[0];
+  const mDates=grouped[mKey]||[];
+  const MONTHS=['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
+  const mLabel=k=>{const[y,m]=k.split('-');return`${MONTHS[parseInt(m)-1]} ${y}`};
+
+  return(
+    <div style={{background:'var(--bg)',minHeight:'100vh',display:'flex',flexDirection:'column'}}>
+      <div style={{background:'var(--surface)',borderBottom:'1px solid var(--border)',padding:'52px 20px 16px'}}>
+        <button onClick={onBack} style={{background:'none',border:'none',color:'var(--gold)',cursor:'pointer',display:'flex',alignItems:'center',gap:6,fontSize:15,padding:0,marginBottom:12,fontWeight:700}}>
+          <Ic n="chL" sz={18} col="var(--gold)"/>Voltar
+        </button>
+        <h2 style={{margin:0,fontSize:22,fontWeight:900}}>Escolha a data</h2>
+        <div style={{display:'flex',alignItems:'center',gap:8,marginTop:8}}>
+          <span style={{background:'rgba(212,175,55,.1)',borderRadius:8,padding:'4px 10px',color:'var(--gold)',fontSize:13,fontWeight:700}}>{svc?.name}</span>
+          <span style={{color:'#555',fontSize:13}}>· {svc?.duration} min</span>
+        </div>
+      </div>
+
+      <div style={{flex:1,padding:'16px 20px 100px',overflowY:'auto'}}>
+        {mKeys.length>1&&(
+          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:16}}>
+            <button onClick={()=>setMOff(Math.max(0,mOff-1))} disabled={mOff===0} style={{background:'none',border:'none',color:mOff===0?'#2a2a2a':'var(--gold)',cursor:mOff===0?'default':'pointer',padding:8}}><Ic n="chL" sz={22}/></button>
+            <span style={{fontWeight:800,fontSize:16}}>{mLabel(mKey)}</span>
+            <button onClick={()=>setMOff(Math.min(mKeys.length-1,mOff+1))} disabled={mOff===mKeys.length-1} style={{background:'none',border:'none',color:mOff===mKeys.length-1?'#2a2a2a':'var(--gold)',cursor:mOff===mKeys.length-1?'default':'pointer',padding:8}}><Ic n="chR" sz={22}/></button>
+          </div>
+        )}
+        <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)',gap:3,marginBottom:6}}>
+          {['D','S','T','Q','Q','S','S'].map((d,i)=><div key={i} style={{textAlign:'center',fontSize:11,color:'#444',padding:'4px 0',fontWeight:700}}>{d}</div>)}
+        </div>
+        {(()=>{
+          const[y,m]=mKey.split('-').map(Number);
+          const fd=new Date(y,m-1,1).getDay();
+          const dm=new Date(y,m,0).getDate();
+          const cells=[];
+          for(let i=0;i<fd;i++)cells.push(null);
+          for(let d=1;d<=dm;d++){const ds=`${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`;cells.push(ds);}
+          return(
+            <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)',gap:3}}>
+              {cells.map((cell,i)=>{
+                if(!cell)return<div key={i}/>;
+                const isA=avail.includes(cell);const isSel=cell===selDate;
+                const dn=parseInt(cell.split('-')[2]);
+                return(
+                  <button key={cell} onClick={()=>isA&&setSelDate(cell)} disabled={!isA} style={{aspectRatio:'1',borderRadius:10,border:isSel?'2px solid var(--gold)':'1.5px solid transparent',background:isSel?'rgba(212,175,55,.18)':isA?'var(--card)':'transparent',color:isSel?'var(--gold)':isA?'var(--text)':'#2a2a2a',fontWeight:isSel?900:500,fontSize:14,cursor:isA?'pointer':'default',transition:'all .15s'}}>
+                    {dn}
+                  </button>
+                );
+              })}
+            </div>
+          );
+        })()}
+
+        {selDate&&(
+          <div style={{marginTop:18,background:'rgba(212,175,55,.07)',border:'1px solid rgba(212,175,55,.25)',borderRadius:12,padding:14,display:'flex',alignItems:'center',gap:10}}>
+            <Ic n="calendar" sz={18} col="var(--gold)"/>
+            <div>
+              <div style={{fontSize:12,color:'#888'}}>Selecionado</div>
+              <div style={{fontWeight:800,color:'var(--gold)'}}>{getDayName(getWeekday(selDate))}, {fmtDate(selDate)}</div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {selDate&&(
+        <div style={{position:'fixed',bottom:0,left:0,right:0,padding:'14px 20px',background:'var(--bg)',borderTop:'1px solid var(--border)',paddingBottom:'calc(14px + env(safe-area-inset-bottom,0px))'}}>
+          <button className="btn-gold" onClick={onNext}>Ver horários disponíveis →</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TimePick({sch,appts,selSvc,svcs,selDate,selTime,setSelTime,onNext,onBack}){
+  const svc=svcs.find(s=>s.id===selSvc);
+  const slots=genSlots(sch,appts,selSvc,selDate,svcs);
+  return(
+    <div style={{background:'var(--bg)',minHeight:'100vh',display:'flex',flexDirection:'column'}}>
+      <div style={{background:'var(--surface)',borderBottom:'1px solid var(--border)',padding:'52px 20px 16px'}}>
+        <button onClick={onBack} style={{background:'none',border:'none',color:'var(--gold)',cursor:'pointer',display:'flex',alignItems:'center',gap:6,fontSize:15,padding:0,marginBottom:12,fontWeight:700}}>
+          <Ic n="chL" sz={18} col="var(--gold)"/>Voltar
+        </button>
+        <h2 style={{margin:0,fontSize:22,fontWeight:900}}>Escolha o horário</h2>
+        <div style={{color:'#777',fontSize:14,marginTop:6}}>{getDayName(getWeekday(selDate))}, {fmtDate(selDate)} · {svc?.name}</div>
+      </div>
+      <div style={{flex:1,padding:'20px 20px 100px',overflowY:'auto'}}>
+        {slots.length===0?(
+          <div style={{textAlign:'center',padding:48,color:'#555'}}>
+            <Ic n="clock" sz={44} col="#2a2a2a"/>
+            <p style={{marginTop:14,fontSize:15}}>Nenhum horário disponível para esta data.</p>
+          </div>
+        ):(
+          <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:8}}>
+            {slots.map(s=>(
+              <button key={s.time} onClick={()=>s.available&&setSelTime(s.time)} className={`time-slot${!s.available?' taken':''}${selTime===s.time?' selected':''}`}>
+                {s.time}
+              </button>
+            ))}
+          </div>
+        )}
+        <div style={{marginTop:18,display:'flex',alignItems:'center',gap:12,color:'#555',fontSize:12}}>
+          <div style={{display:'flex',alignItems:'center',gap:6}}><div style={{width:24,height:24,borderRadius:6,border:'1.5px solid var(--border)',background:'var(--card)'}}/><span>Livre</span></div>
+          <div style={{display:'flex',alignItems:'center',gap:6}}><div style={{width:24,height:24,borderRadius:6,border:'1.5px solid var(--border)',background:'var(--card)',opacity:.3}}/><span>Ocupado</span></div>
+          <div style={{display:'flex',alignItems:'center',gap:6}}><div style={{width:24,height:24,borderRadius:6,border:'1.5px solid var(--gold)',background:'rgba(212,175,55,.15)'}}/><span>Selecionado</span></div>
+        </div>
+      </div>
+      {selTime&&(
+        <div style={{position:'fixed',bottom:0,left:0,right:0,padding:'14px 20px',background:'var(--bg)',borderTop:'1px solid var(--border)',paddingBottom:'calc(14px + env(safe-area-inset-bottom,0px))'}}>
+          <button className="btn-gold" onClick={onNext}>Continuar · {selTime} →</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function BookForm({selSvc,svcs,selDate,selTime,cName,setCName,cPhone,setCPhone,onConfirm,onBack}){
+  const svc=svcs.find(s=>s.id===selSvc);
+  const[err,setErr]=useState('');
+  const fmtPh=v=>{const n=v.replace(/\D/g,'').slice(0,11);if(n.length<=2)return n.length?`(${n}`:'';if(n.length<=7)return`(${n.slice(0,2)}) ${n.slice(2)}`;return`(${n.slice(0,2)}) ${n.slice(2,7)}-${n.slice(7)}`};
+  const go=()=>{if(!cName.trim()){setErr('Informe seu nome completo.');return}if(cPhone.replace(/\D/g,'').length<10){setErr('Informe um telefone válido com DDD.');return}setErr('');onConfirm()};
+  return(
+    <div style={{background:'var(--bg)',minHeight:'100vh',display:'flex',flexDirection:'column'}}>
+      <div style={{background:'var(--surface)',borderBottom:'1px solid var(--border)',padding:'52px 20px 16px'}}>
+        <button onClick={onBack} style={{background:'none',border:'none',color:'var(--gold)',cursor:'pointer',display:'flex',alignItems:'center',gap:6,fontSize:15,padding:0,marginBottom:12,fontWeight:700}}>
+          <Ic n="chL" sz={18} col="var(--gold)"/>Voltar
+        </button>
+        <h2 style={{margin:0,fontSize:22,fontWeight:900}}>Seus dados</h2>
+        <p style={{color:'#777',fontSize:14,margin:'6px 0 0'}}>Preencha para confirmar o agendamento</p>
+      </div>
+      <div style={{flex:1,padding:'20px 20px 120px',overflowY:'auto'}}>
+        <div style={{background:'var(--card)',border:'1px solid rgba(212,175,55,.25)',borderRadius:14,padding:18,marginBottom:24}}>
+          <div style={{fontSize:12,color:'#666',marginBottom:12,fontWeight:700,textTransform:'uppercase',letterSpacing:'.05em'}}>Resumo do agendamento</div>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+            <span style={{color:'#ddd',fontSize:15,fontWeight:700}}>{svc?.name}</span>
+            <span style={{color:'var(--gold)',fontWeight:900,fontSize:18}}>{fmtPrice(svc?.price||0)}</span>
+          </div>
+          <div style={{display:'flex',gap:14,color:'#777',fontSize:13,flexWrap:'wrap'}}>
+            <span>📅 {getDayName(getWeekday(selDate))}, {fmtDate(selDate)}</span>
+            <span>🕐 {selTime}</span>
+            <span>⏱ {svc?.duration} min</span>
+          </div>
+        </div>
+        <div style={{display:'flex',flexDirection:'column',gap:16}}>
+          <div>
+            <label style={{display:'block',fontSize:14,fontWeight:700,marginBottom:8,color:'#ccc'}}>Nome completo</label>
+            <input className="input-dark" placeholder="João Silva" value={cName} onChange={e=>setCName(e.target.value)}/>
+          </div>
+          <div>
+            <label style={{display:'block',fontSize:14,fontWeight:700,marginBottom:8,color:'#ccc'}}>Telefone / WhatsApp</label>
+            <input className="input-dark" placeholder="(31) 99999-9999" value={cPhone} onChange={e=>setCPhone(fmtPh(e.target.value))} inputMode="tel"/>
+          </div>
+          {err&&<p style={{color:'#ef4444',fontSize:14,margin:0,fontWeight:600}}>⚠ {err}</p>}
+        </div>
+      </div>
+      <div style={{position:'fixed',bottom:0,left:0,right:0,padding:'14px 20px',background:'var(--bg)',borderTop:'1px solid var(--border)',paddingBottom:'calc(14px + env(safe-area-inset-bottom,0px))'}}>
+        <button className="btn-gold" onClick={go}>Confirmar agendamento</button>
+      </div>
+    </div>
+  );
+}
+
+function BookDone({booking,onReset}){
+  const cal=()=>{
+    const[y,m,d]=booking.date.split('-');const[h,mn]=booking.time.split(':');
+    const s=`${y}${m}${d}T${h}${mn}00`;
+    const em=parseInt(h)*60+parseInt(mn)+booking.duration;
+    const e=`${y}${m}${d}T${String(Math.floor(em/60)).padStart(2,'0')}${String(em%60).padStart(2,'0')}00`;
+    window.open(`https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(booking.service)}&dates=${s}/${e}`,'_blank');
+  };
+  return(
+    <div style={{background:'var(--bg)',minHeight:'100vh',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',padding:24}}>
+      <div style={{textAlign:'center',width:'100%',maxWidth:400}}>
+        <div style={{width:88,height:88,borderRadius:'50%',background:'rgba(34,197,94,.1)',border:'2px solid #22c55e',display:'flex',alignItems:'center',justifyContent:'center',margin:'0 auto 24px'}}>
+          <Ic n="check" sz={44} col="#22c55e"/>
+        </div>
+        <h2 style={{fontSize:26,fontWeight:900,margin:'0 0 8px',color:'#22c55e'}}>Agendado!</h2>
+        <p style={{color:'#888',fontSize:15,margin:'0 0 28px'}}>Seu horário foi reservado com sucesso.</p>
+        <div style={{background:'var(--card)',border:'1px solid var(--border)',borderRadius:16,padding:20,textAlign:'left',marginBottom:20}}>
+          {[['scissors','Serviço',booking.service],['calendar','Data',`${getDayName(getWeekday(booking.date))}, ${fmtDate(booking.date)}`],['clock','Horário',`${booking.time} · ${booking.duration} min`],['user','Cliente',booking.client],['phone','Telefone',booking.phone]].map(([icon,label,val])=>(
+            <div key={label} style={{display:'flex',alignItems:'center',gap:12,marginBottom:12}}>
+              <div style={{width:36,height:36,borderRadius:8,background:'rgba(212,175,55,.08)',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
+                <Ic n={icon} sz={16} col="var(--gold)"/>
+              </div>
+              <div><div style={{fontSize:11,color:'#555',marginBottom:1}}>{label}</div><div style={{fontSize:14,fontWeight:700}}>{val}</div></div>
+            </div>
+          ))}
+          <div style={{borderTop:'1px solid var(--border)',paddingTop:12,display:'flex',justifyContent:'space-between',alignItems:'center',marginTop:4}}>
+            <span style={{color:'#888',fontSize:14}}>Total a pagar</span>
+            <span style={{color:'var(--gold)',fontWeight:900,fontSize:20}}>{fmtPrice(booking.price)}</span>
+          </div>
+        </div>
+        <div style={{display:'flex',flexDirection:'column',gap:10}}>
+          <button className="btn-outline" onClick={cal}>📅 Adicionar ao calendário</button>
+          <button className="btn-gold" onClick={onReset}>Fazer novo agendamento</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── ADMIN ───────────────────────────────────────────────────
+function AdminView({shop,setShop,services,setServices,sch,setSch,appts,setAppts,notifs,setNotifs,unread,tab,setTab,updStatus,onPublic}){
+  const[authed,setAuthed]=useState(()=>ls('bb_auth',false));
+  if(!authed) return<Login onLogin={()=>{ls_set('bb_auth',true);setAuthed(true)}}/>;
+  const logout=()=>{ls_set('bb_auth',false);setAuthed(false)};
+  return(
+    <div style={{background:'var(--bg)',minHeight:'100vh',paddingBottom:72}}>
+      <div style={{background:'var(--surface)',borderBottom:'1px solid var(--border)',padding:'52px 20px 14px',display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+        <div>
+          <h1 style={{margin:0,fontSize:18,fontWeight:900}}>{shop.name}</h1>
+          <p style={{margin:0,color:'#555',fontSize:13}}>Painel Administrativo</p>
+        </div>
+        <div style={{display:'flex',gap:4}}>
+          <button onClick={()=>setTab('notifs')} style={{background:'none',border:'none',cursor:'pointer',padding:10,position:'relative'}}>
+            <Ic n="bell" sz={22} col={tab==='notifs'?'var(--gold)':'#666'}/>
+            {unread>0&&<span style={{position:'absolute',top:6,right:6,width:16,height:16,background:'var(--gold)',borderRadius:'50%',fontSize:9,color:'#000',fontWeight:900,display:'flex',alignItems:'center',justifyContent:'center'}}>{unread}</span>}
+          </button>
+          <button onClick={logout} style={{background:'none',border:'none',cursor:'pointer',padding:10}}><Ic n="logout" sz={22} col="#666"/></button>
+        </div>
+      </div>
+
+      <div style={{overflowY:'auto'}}>
+        {tab==='dashboard'&&<Dash appts={appts} notifs={notifs} onPublic={onPublic} onTab={setTab}/>}
+        {tab==='agenda'&&<Agenda appts={appts} updStatus={updStatus}/>}
+        {tab==='services'&&<Services services={services} setServices={setServices}/>}
+        {tab==='appts'&&<ApptList appts={appts} updStatus={updStatus}/>}
+        {tab==='config'&&<Config sch={sch} setSch={setSch} shop={shop} setShop={setShop}/>}
+        {tab==='notifs'&&<Notifs notifs={notifs} setNotifs={setNotifs}/>}
+      </div>
+
+      <div className="bottom-nav">
+        {[['dashboard','home','Início'],['agenda','calendar','Agenda'],['services','scissors','Serviços'],['appts','list','Pedidos'],['config','settings','Config.']].map(([id,ic,lb])=>(
+          <button key={id} onClick={()=>setTab(id)} className={tab===id?'active':''}>
+            <Ic n={ic} sz={22}/><span>{lb}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function Login({onLogin}){
+  const[u,setU]=useState('');const[p,setP]=useState('');const[err,setErr]=useState('');const[loading,setLoading]=useState(false);const[sp,setSp]=useState(false);
+  const go=()=>{if(!u||!p){setErr('Preencha todos os campos.');return}setLoading(true);setTimeout(()=>{if(u==='admin'&&p==='1234'){onLogin()}else{setErr('Usuário ou senha incorretos.');setLoading(false)}},900)};
+  return(
+    <div style={{background:'var(--bg)',minHeight:'100vh',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',padding:24}}>
+      <div style={{width:'100%',maxWidth:380}}>
+        <div style={{textAlign:'center',marginBottom:40}}>
+          <div style={{width:72,height:72,borderRadius:'50%',background:'rgba(212,175,55,.1)',border:'2px solid var(--gold)',display:'flex',alignItems:'center',justifyContent:'center',margin:'0 auto 20px'}}>
+            <Ic n="lock" sz={32} col="var(--gold)"/>
+          </div>
+          <h1 style={{fontSize:24,fontWeight:900,margin:0}}>Área Administrativa</h1>
+          <p style={{color:'#555',fontSize:14,margin:'8px 0 0'}}>Acesso exclusivo para o proprietário</p>
+          <p style={{color:'rgba(212,175,55,.6)',fontSize:13,margin:'8px 0 0'}}>Demo: admin / 1234</p>
+        </div>
+        <div style={{display:'flex',flexDirection:'column',gap:14}}>
+          <div>
+            <label style={{display:'block',fontSize:14,fontWeight:700,marginBottom:8,color:'#ccc'}}>Usuário</label>
+            <input className="input-dark" placeholder="admin" value={u} onChange={e=>setU(e.target.value)} autoComplete="username"/>
+          </div>
+          <div>
+            <label style={{display:'block',fontSize:14,fontWeight:700,marginBottom:8,color:'#ccc'}}>Senha</label>
+            <div style={{position:'relative'}}>
+              <input className="input-dark" placeholder="••••••••" type={sp?'text':'password'} value={p} onChange={e=>setP(e.target.value)} onKeyDown={e=>e.key==='Enter'&&go()} autoComplete="current-password"/>
+              <button onClick={()=>setSp(!sp)} style={{position:'absolute',right:14,top:'50%',transform:'translateY(-50%)',background:'none',border:'none',cursor:'pointer',color:'#444',display:'flex'}}>
+                <Ic n="eye" sz={18}/>
+              </button>
+            </div>
+          </div>
+          {err&&<p style={{color:'#ef4444',fontSize:14,margin:0,fontWeight:600}}>⚠ {err}</p>}
+          <button className="btn-gold" onClick={go} disabled={loading} style={{marginTop:8}}>
+            {loading?'Entrando...':'Entrar'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Dash({appts,notifs,onPublic,onTab}){
+  const today=appts.filter(a=>a.date===TODAY);
+  const pending=appts.filter(a=>a.status==='pending').length;
+  const confirmed=appts.filter(a=>a.status==='confirmed').length;
+  const revenue=today.filter(a=>a.status==='confirmed'||a.status==='done').reduce((s,a)=>s+a.price,0);
+  return(
+    <div style={{padding:16}}>
+      <div style={{padding:'8px 4px 16px'}}>
+        <h2 style={{fontSize:20,fontWeight:900,margin:0}}>Olá, Barbeiro 👋</h2>
+        <p style={{color:'#555',fontSize:14,margin:'4px 0 0'}}>Domingo, 18 de outubro de 2026</p>
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:16}}>
+        {[['Hoje',today.length,'agendamentos','var(--gold)'],['Pendentes',pending,'aguardando','#f59e0b'],['Confirmados',confirmed,'agendados','#22c55e'],['Faturamento hj',`R$\u00a0${revenue}`,'.','#818cf8']].map(([l,v,s,c])=>(
+          <div key={l} style={{background:'var(--card)',border:'1px solid var(--border)',borderRadius:12,padding:16}}>
+            <div style={{fontSize:22,fontWeight:900,color:c}}>{v}</div>
+            <div style={{fontSize:13,fontWeight:700,color:'#ccc',marginTop:2}}>{l}</div>
+            {s!=='.'&&<div style={{fontSize:11,color:'#555',marginTop:1}}>{s}</div>}
+          </div>
+        ))}
+      </div>
+      <div style={{marginBottom:16}}>
+        <div style={{fontSize:12,fontWeight:700,color:'#555',textTransform:'uppercase',letterSpacing:'.05em',marginBottom:10}}>Ações rápidas</div>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+          {[['calendar','Ver agenda','agenda'],['list','Agendamentos','appts'],['scissors','Serviços','services'],['eye','Página pública',null]].map(([ic,lb,t])=>(
+            <button key={lb} onClick={()=>t?onTab(t):onPublic()} className="card-hover" style={{background:'var(--card)',border:'1px solid var(--border)',borderRadius:12,padding:'14px 12px',display:'flex',alignItems:'center',gap:10,cursor:'pointer',color:'var(--text)',fontSize:14,fontWeight:700,width:'100%'}}>
+              <Ic n={ic} sz={18} col="var(--gold)"/>{lb}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div>
+        <div style={{fontSize:12,fontWeight:700,color:'#555',textTransform:'uppercase',letterSpacing:'.05em',marginBottom:10}}>Agenda de hoje</div>
+        {today.length===0
+          ?<div style={{background:'var(--card)',border:'1px solid var(--border)',borderRadius:12,padding:28,textAlign:'center',color:'#444'}}>Nenhum agendamento para hoje.</div>
+          :<div style={{display:'flex',flexDirection:'column',gap:8}}>{today.sort((a,b)=>a.time.localeCompare(b.time)).map(a=><ApptCard key={a.id} a={a} compact/>)}</div>
+        }
+      </div>
+    </div>
+  );
+}
+
+function ApptCard({a,compact,onConfirm,onCancel,onDone}){
+  const STATUS={pending:{label:'Pendente',cls:'badge-pending'},confirmed:{label:'Confirmado',cls:'badge-confirmed'},done:{label:'Concluído',cls:'badge-done'},cancelled:{label:'Cancelado',cls:'badge-cancelled'}};
+  const s=STATUS[a.status]||STATUS.pending;
+  return(
+    <div style={{background:'var(--card)',border:'1px solid var(--border)',borderRadius:12,padding:compact?14:16}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:8}}>
+        <div>
+          <div style={{fontWeight:800,fontSize:15,marginBottom:3}}>{a.client}</div>
+          <div style={{color:'#666',fontSize:13,display:'flex',alignItems:'center',gap:4}}><Ic n="phone" sz={12} col="#555"/>{a.phone}</div>
+        </div>
+        <span className={`badge ${s.cls}`}>{s.label}</span>
+      </div>
+      <div style={{display:'flex',gap:12,flexWrap:'wrap',color:'#888',fontSize:13,marginBottom:compact?0:(!onConfirm&&!onCancel&&!onDone?0:12)}}>
+        <span>✂ {a.service}</span><span>🕐 {a.time}</span><span style={{color:'var(--gold)',fontWeight:800}}>{fmtPrice(a.price)}</span>
+      </div>
+      {!compact&&a.status!=='cancelled'&&a.status!=='done'&&(onConfirm||onCancel||onDone)&&(
+        <div style={{display:'flex',gap:8,marginTop:12}}>
+          {a.status==='pending'&&onConfirm&&<button onClick={()=>onConfirm(a.id)} style={{flex:1,background:'rgba(34,197,94,.1)',border:'1px solid rgba(34,197,94,.3)',borderRadius:8,padding:'9px 0',color:'#22c55e',cursor:'pointer',fontSize:13,fontWeight:700}}>✓ Confirmar</button>}
+          {a.status==='confirmed'&&onDone&&<button onClick={()=>onDone(a.id)} style={{flex:1,background:'rgba(99,102,241,.1)',border:'1px solid rgba(99,102,241,.3)',borderRadius:8,padding:'9px 0',color:'#818cf8',cursor:'pointer',fontSize:13,fontWeight:700}}>✓ Concluído</button>}
+          {onCancel&&<button onClick={()=>onCancel(a.id)} style={{background:'rgba(239,68,68,.1)',border:'1px solid rgba(239,68,68,.3)',borderRadius:8,padding:'9px 14px',color:'#ef4444',cursor:'pointer',fontSize:13,fontWeight:700}}>✕</button>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Agenda({appts,updStatus}){
+  const[date,setDate]=useState(TOMORROW);
+  const[mode,setMode]=useState('day');
+  const dayAppts=appts.filter(a=>a.date===date).sort((a,b)=>a.time.localeCompare(b.time));
+  const wd=getWeekday(date);
+  const weekStart=addDays(date,-wd);
+  const week=Array.from({length:7},(_,i)=>addDays(weekStart,i));
+  return(
+    <div style={{padding:16}}>
+      <div style={{display:'flex',gap:8,marginBottom:14}}>
+        {[['day','Dia'],['week','Semana']].map(([v,l])=>(
+          <button key={v} onClick={()=>setMode(v)} style={{flex:1,padding:'9px 0',borderRadius:10,border:'1.5px solid',borderColor:mode===v?'var(--gold)':'var(--border)',background:mode===v?'rgba(212,175,55,.1)':'transparent',color:mode===v?'var(--gold)':'#777',cursor:'pointer',fontWeight:700,fontSize:14}}>
+            {l}
+          </button>
+        ))}
+      </div>
+      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:14}}>
+        <button onClick={()=>setDate(addDays(date,-1))} style={{background:'var(--card)',border:'1px solid var(--border)',borderRadius:8,padding:'9px 12px',cursor:'pointer',color:'#ccc',display:'flex'}}><Ic n="chL" sz={18}/></button>
+        <div style={{flex:1,textAlign:'center',fontWeight:800,fontSize:15}}>
+          {mode==='day'?`${getDayName(getWeekday(date))}, ${fmtDate(date)}`:`${fmtDate(week[0])} – ${fmtDate(week[6])}`}
+        </div>
+        <button onClick={()=>setDate(addDays(date,1))} style={{background:'var(--card)',border:'1px solid var(--border)',borderRadius:8,padding:'9px 12px',cursor:'pointer',color:'#ccc',display:'flex'}}><Ic n="chR" sz={18}/></button>
+      </div>
+      {mode==='week'&&(
+        <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)',gap:4,marginBottom:14}}>
+          {week.map(d=>{
+            const cnt=appts.filter(a=>a.date===d).length;
+            const isSel=d===date;
+            return(
+              <button key={d} onClick={()=>{setDate(d);setMode('day')}} style={{background:isSel?'rgba(212,175,55,.15)':'var(--card)',border:`1.5px solid ${isSel?'var(--gold)':'var(--border)'}`,borderRadius:10,padding:'8px 4px',textAlign:'center',cursor:'pointer'}}>
+                <div style={{fontSize:10,color:'#555',marginBottom:2}}>{getDayName(getWeekday(d))}</div>
+                <div style={{fontSize:15,fontWeight:800,color:isSel?'var(--gold)':'var(--text)'}}>{parseInt(d.split('-')[2])}</div>
+                {cnt>0&&<div style={{fontSize:10,color:'var(--gold)',marginTop:2,fontWeight:700}}>{cnt}</div>}
+              </button>
+            );
+          })}
+        </div>
+      )}
+      {dayAppts.length===0
+        ?<div style={{textAlign:'center',padding:40,color:'#444'}}><Ic n="calendar" sz={44} col="#2a2a2a"/><p style={{marginTop:14}}>Nenhum agendamento para este dia.</p></div>
+        :<div style={{display:'flex',flexDirection:'column',gap:10}}>
+          {dayAppts.map(a=><ApptCard key={a.id} a={a} onConfirm={a.status==='pending'?id=>updStatus(id,'confirmed'):null} onCancel={a.status!=='cancelled'&&a.status!=='done'?id=>updStatus(id,'cancelled'):null} onDone={a.status==='confirmed'?id=>updStatus(id,'done'):null}/>)}
+        </div>
+      }
+    </div>
+  );
+}
+
+function Services({services,setServices}){
+  const[modal,setModal]=useState(false);
+  const[ed,setEd]=useState(null);
+  const[form,setForm]=useState({name:'',desc:'',price:'',duration:'',active:true});
+  const openNew=()=>{setEd(null);setForm({name:'',desc:'',price:'',duration:'',active:true});setModal(true)};
+  const openEdit=svc=>{setEd(svc);setForm({name:svc.name,desc:svc.desc,price:String(svc.price),duration:String(svc.duration),active:svc.active});setModal(true)};
+  const save=()=>{
+    if(!form.name||!form.price||!form.duration)return;
+    if(ed)setServices(p=>p.map(s=>s.id===ed.id?{...s,...form,price:parseFloat(form.price),duration:parseInt(form.duration)}:s));
+    else setServices(p=>[...p,{id:Date.now(),...form,price:parseFloat(form.price),duration:parseInt(form.duration)}]);
+    setModal(false);
+  };
+  const toggle=id=>setServices(p=>p.map(s=>s.id===id?{...s,active:!s.active}:s));
+  const del=id=>{if(confirm('Excluir este serviço?'))setServices(p=>p.filter(s=>s.id!==id))};
+  return(
+    <div style={{padding:16}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+        <h2 style={{margin:0,fontSize:20,fontWeight:900}}>Serviços</h2>
+        <button onClick={openNew} style={{background:'var(--gold)',border:'none',borderRadius:10,padding:'9px 16px',color:'#000',fontWeight:800,cursor:'pointer',display:'flex',alignItems:'center',gap:6,fontSize:14}}>
+          <Ic n="plus" sz={16} col="#000"/>Novo
+        </button>
+      </div>
+      <div style={{display:'flex',flexDirection:'column',gap:10}}>
+        {services.map(svc=>(
+          <div key={svc.id} style={{background:'var(--card)',border:'1px solid var(--border)',borderRadius:12,padding:16}}>
+            <div style={{display:'flex',alignItems:'flex-start',gap:10}}>
+              <div style={{flex:1}}>
+                <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:5}}>
+                  <span style={{fontWeight:800,fontSize:15}}>{svc.name}</span>
+                  <span style={{fontSize:11,padding:'2px 8px',borderRadius:20,background:svc.active?'rgba(34,197,94,.1)':'rgba(107,114,128,.1)',color:svc.active?'#22c55e':'#6b7280',fontWeight:700}}>{svc.active?'Ativo':'Inativo'}</span>
+                </div>
+                {svc.desc&&<div style={{color:'#777',fontSize:13,marginBottom:8}}>{svc.desc}</div>}
+                <div style={{display:'flex',gap:14,color:'#888',fontSize:13}}>
+                  <span style={{color:'var(--gold)',fontWeight:800,fontSize:16}}>{fmtPrice(svc.price)}</span>
+                  <span>⏱ {svc.duration} min</span>
+                </div>
+              </div>
+              <div style={{display:'flex',gap:2}}>
+                <button onClick={()=>openEdit(svc)} style={{background:'none',border:'none',cursor:'pointer',padding:8,color:'#666'}}><Ic n="edit" sz={18}/></button>
+                <button onClick={()=>toggle(svc.id)} style={{background:'none',border:'none',cursor:'pointer',padding:8,color:'#666'}}><Ic n="eye" sz={18}/></button>
+                <button onClick={()=>del(svc.id)} style={{background:'none',border:'none',cursor:'pointer',padding:8,color:'#555'}}><Ic n="trash" sz={18}/></button>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+      {modal&&(
+        <div className="modal-overlay" onClick={e=>e.target===e.currentTarget&&setModal(false)}>
+          <div className="modal-sheet">
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20}}>
+              <h3 style={{margin:0,fontSize:18,fontWeight:900}}>{ed?'Editar serviço':'Novo serviço'}</h3>
+              <button onClick={()=>setModal(false)} style={{background:'none',border:'none',cursor:'pointer',color:'#777'}}><Ic n="x" sz={24}/></button>
+            </div>
+            <div style={{display:'flex',flexDirection:'column',gap:14}}>
+              <div><label style={{display:'block',fontSize:14,fontWeight:700,marginBottom:7,color:'#ccc'}}>Nome *</label><input className="input-dark" value={form.name} onChange={e=>setForm({...form,name:e.target.value})} placeholder="Ex: Corte Masculino"/></div>
+              <div><label style={{display:'block',fontSize:14,fontWeight:700,marginBottom:7,color:'#ccc'}}>Descrição</label><input className="input-dark" value={form.desc} onChange={e=>setForm({...form,desc:e.target.value})} placeholder="Descrição opcional..."/></div>
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+                <div><label style={{display:'block',fontSize:14,fontWeight:700,marginBottom:7,color:'#ccc'}}>Preço (R$) *</label><input className="input-dark" type="number" value={form.price} onChange={e=>setForm({...form,price:e.target.value})} placeholder="35" inputMode="decimal"/></div>
+                <div><label style={{display:'block',fontSize:14,fontWeight:700,marginBottom:7,color:'#ccc'}}>Duração (min) *</label><input className="input-dark" type="number" value={form.duration} onChange={e=>setForm({...form,duration:e.target.value})} placeholder="30" inputMode="numeric"/></div>
+              </div>
+              <label style={{display:'flex',alignItems:'center',gap:10,cursor:'pointer'}}>
+                <input type="checkbox" checked={form.active} onChange={e=>setForm({...form,active:e.target.checked})} style={{width:18,height:18,accentColor:'var(--gold)'}}/>
+                <span style={{fontSize:14,fontWeight:700,color:'#ccc'}}>Serviço ativo (visível para clientes)</span>
+              </label>
+              <button className="btn-gold" onClick={save} style={{marginTop:4}}>{ed?'Salvar alterações':'Cadastrar serviço'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ApptList({appts,updStatus}){
+  const[filter,setFilter]=useState('all');
+  const sorted=[...appts].filter(a=>filter==='all'||a.status===filter).sort((a,b)=>a.date.localeCompare(b.date)||a.time.localeCompare(b.time));
+  return(
+    <div style={{padding:16}}>
+      <h2 style={{margin:'0 0 14px',fontSize:20,fontWeight:900}}>Agendamentos</h2>
+      <div style={{display:'flex',gap:6,marginBottom:16,overflowX:'auto',paddingBottom:4}}>
+        {[['all','Todos'],['pending','Pendentes'],['confirmed','Confirmados'],['done','Concluídos'],['cancelled','Cancelados']].map(([v,l])=>(
+          <button key={v} onClick={()=>setFilter(v)} style={{whiteSpace:'nowrap',padding:'7px 14px',borderRadius:20,border:'1.5px solid',borderColor:filter===v?'var(--gold)':'var(--border)',background:filter===v?'rgba(212,175,55,.1)':'transparent',color:filter===v?'var(--gold)':'#777',cursor:'pointer',fontSize:13,fontWeight:700}}>
+            {l}
+          </button>
+        ))}
+      </div>
+      {sorted.length===0
+        ?<div style={{textAlign:'center',padding:40,color:'#444'}}>Nenhum agendamento encontrado.</div>
+        :<div style={{display:'flex',flexDirection:'column',gap:10}}>
+          {sorted.map((a,i)=>(
+            <div key={a.id}>
+              {(i===0||sorted[i-1].date!==a.date)&&<div style={{fontSize:12,color:'#555',marginBottom:6,fontWeight:700,paddingLeft:2}}>{fmtDate(a.date)}</div>}
+              <ApptCard a={a} onConfirm={a.status==='pending'?id=>updStatus(id,'confirmed'):null} onCancel={a.status!=='cancelled'&&a.status!=='done'?id=>updStatus(id,'cancelled'):null} onDone={a.status==='confirmed'?id=>updStatus(id,'done'):null}/>
+            </div>
+          ))}
+        </div>
+      }
+    </div>
+  );
+}
+
+function Config({sch,setSch,shop,setShop}){
+  const[sec,setSec]=useState('schedule');
+  const[sf,setSf]=useState(sch);
+  const[shf,setShf]=useState(shop);
+  const DAYS=['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'];
+  const toggleDay=d=>{const ds=sf.days.includes(d)?sf.days.filter(x=>x!==d):[...sf.days,d].sort();setSf({...sf,days:ds})};
+  return(
+    <div style={{padding:16}}>
+      <h2 style={{margin:'0 0 16px',fontSize:20,fontWeight:900}}>Configurações</h2>
+      <div style={{display:'flex',gap:8,marginBottom:20}}>
+        {[['schedule','Horários'],['shop','Barbearia']].map(([v,l])=>(
+          <button key={v} onClick={()=>setSec(v)} style={{flex:1,padding:'9px 0',borderRadius:10,border:'1.5px solid',borderColor:sec===v?'var(--gold)':'var(--border)',background:sec===v?'rgba(212,175,55,.1)':'transparent',color:sec===v?'var(--gold)':'#777',cursor:'pointer',fontWeight:700,fontSize:14}}>
+            {l}
+          </button>
+        ))}
+      </div>
+      {sec==='schedule'&&(
+        <div style={{display:'flex',flexDirection:'column',gap:14}}>
+          <Section title="Dias de funcionamento">
+            <div style={{display:'flex',gap:8,flexWrap:'wrap',paddingTop:4}}>
+              {DAYS.map((l,i)=><button key={i} onClick={()=>toggleDay(i)} className={`day-btn${sf.days.includes(i)?' active':''}`}>{l}</button>)}
+            </div>
+          </Section>
+          <Section title="Horário de atendimento">
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+              <div><label style={{display:'block',fontSize:13,color:'#777',marginBottom:6}}>Abertura</label><input className="input-dark" type="time" value={sf.start} onChange={e=>setSf({...sf,start:e.target.value})}/></div>
+              <div><label style={{display:'block',fontSize:13,color:'#777',marginBottom:6}}>Fechamento</label><input className="input-dark" type="time" value={sf.end} onChange={e=>setSf({...sf,end:e.target.value})}/></div>
+            </div>
+          </Section>
+          <Section title="Intervalo / Almoço">
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+              <div><label style={{display:'block',fontSize:13,color:'#777',marginBottom:6}}>Início</label><input className="input-dark" type="time" value={sf.breakStart} onChange={e=>setSf({...sf,breakStart:e.target.value})}/></div>
+              <div><label style={{display:'block',fontSize:13,color:'#777',marginBottom:6}}>Fim</label><input className="input-dark" type="time" value={sf.breakEnd} onChange={e=>setSf({...sf,breakEnd:e.target.value})}/></div>
+            </div>
+          </Section>
+          <Section title="Regras de agendamento">
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+              <div><label style={{display:'block',fontSize:13,color:'#777',marginBottom:6}}>Antecedência mín. (h)</label><input className="input-dark" type="number" value={sf.minAdvanceHours} onChange={e=>setSf({...sf,minAdvanceHours:parseInt(e.target.value)||1}) } inputMode="numeric"/></div>
+              <div><label style={{display:'block',fontSize:13,color:'#777',marginBottom:6}}>Máx. dias antecedência</label><input className="input-dark" type="number" value={sf.maxAdvanceDays} onChange={e=>setSf({...sf,maxAdvanceDays:parseInt(e.target.value)||30})} inputMode="numeric"/></div>
+            </div>
+          </Section>
+          <button className="btn-gold" onClick={()=>{setSch(sf);alert('Horários salvos com sucesso!')}}>Salvar horários</button>
+        </div>
+      )}
+      {sec==='shop'&&(
+        <div style={{display:'flex',flexDirection:'column',gap:14}}>
+          {[['name','Nome da barbearia'],['tagline','Slogan'],['address','Endereço'],['phone','Telefone'],['instagram','Instagram']].map(([f,l])=>(
+            <div key={f}>
+              <label style={{display:'block',fontSize:14,fontWeight:700,marginBottom:7,color:'#ccc'}}>{l}</label>
+              <input className="input-dark" value={shf[f]} onChange={e=>setShf({...shf,[f]:e.target.value})}/>
+            </div>
+          ))}
+          <button className="btn-gold" onClick={()=>{setShop(shf);alert('Dados da barbearia salvos!')}} style={{marginTop:4}}>Salvar dados</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Section({title,children}){
+  return(
+    <div style={{background:'var(--card)',border:'1px solid var(--border)',borderRadius:12,padding:16}}>
+      <div style={{fontSize:13,fontWeight:800,color:'#bbb',marginBottom:14,textTransform:'uppercase',letterSpacing:'.04em'}}>{title}</div>
+      {children}
+    </div>
+  );
+}
+
+function Notifs({notifs,setNotifs}){
+  const markAll=()=>setNotifs(p=>p.map(n=>({...n,read:true})));
+  const markOne=id=>setNotifs(p=>p.map(n=>n.id===id?{...n,read:true}:n));
+  return(
+    <div style={{padding:16}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+        <h2 style={{margin:0,fontSize:20,fontWeight:900}}>Notificações</h2>
+        {notifs.some(n=>!n.read)&&<button onClick={markAll} style={{background:'none',border:'none',color:'var(--gold)',cursor:'pointer',fontSize:13,fontWeight:700}}>Marcar lidas</button>}
+      </div>
+      {notifs.length===0
+        ?<div style={{textAlign:'center',padding:48,color:'#444'}}><Ic n="bell" sz={44} col="#2a2a2a"/><p style={{marginTop:14}}>Nenhuma notificação.</p></div>
+        :<div style={{display:'flex',flexDirection:'column',gap:8}}>
+          {notifs.map(n=>(
+            <div key={n.id} onClick={()=>markOne(n.id)} style={{background:n.read?'var(--card)':'rgba(212,175,55,.05)',border:`1px solid ${n.read?'var(--border)':'rgba(212,175,55,.22)'}`,borderRadius:12,padding:16,cursor:'pointer'}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
+                <div style={{display:'flex',alignItems:'center',gap:8}}>
+                  {!n.read&&<div style={{width:8,height:8,borderRadius:'50%',background:'var(--gold)',flexShrink:0}}/>}
+                  <span style={{fontWeight:800,fontSize:14}}>🔔 Novo Agendamento</span>
+                </div>
+                <span style={{fontSize:11,color:'#444'}}>{n.ts}</span>
+              </div>
+              <div style={{display:'flex',flexDirection:'column',gap:5,paddingLeft:n.read?0:16}}>
+                <div style={{display:'flex',gap:8,fontSize:14,alignItems:'center'}}><Ic n="user" sz={14} col="#666"/><span style={{color:'#ccc',fontWeight:700}}>{n.client}</span></div>
+                <div style={{display:'flex',gap:8,fontSize:13,color:'#777',alignItems:'center'}}><Ic n="scissors" sz={13} col="#555"/><span>{n.service} · {fmtDate(n.date)} · {n.time}</span></div>
+                <div style={{display:'flex',gap:8,fontSize:13,color:'#777',alignItems:'center'}}><Ic n="phone" sz={13} col="#555"/><span>{n.phone}</span></div>
+              </div>
+            </div>
+          ))}
+        </div>
+      }
+    </div>
+  );
+}
+
+const root=ReactDOM.createRoot(document.getElementById('root'));
+root.render(<App/>);
+</script>
+</body>
+</html>
